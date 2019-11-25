@@ -11,13 +11,13 @@ var rrwebSnapshot = (function (exports) {
   })(exports.NodeType || (exports.NodeType = {}));
 
   var _id = 1;
+  var symbolAndNumberRegex = RegExp('[^a-z]');
   function genId() {
       return _id++;
   }
   function getValidTagName(tagName) {
       var processedTagName = tagName.toLowerCase().trim();
-      processedTagName = processedTagName.replace(/[^a-z]/gi, '');
-      if (processedTagName === '') {
+      if (symbolAndNumberRegex.test(processedTagName)) {
           return 'div';
       }
       return processedTagName;
