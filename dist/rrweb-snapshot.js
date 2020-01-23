@@ -59,6 +59,9 @@ var rrwebSnapshot = (function (exports) {
   var RELATIVE_PATH = /^(?!www\.|(?:http|ftp)s?:\/\/|[A-Za-z]:\\|\/\/).*/;
   var DATA_URI = /^(data:)([\w\/\+\-]+);(charset=[\w-]+|base64).*,(.*)/i;
   function absoluteToStylesheet(cssText, href) {
+      if (cssText === null || cssText === 'underfined' || !cssText) {
+          return '';
+      }
       return cssText.replace(URL_IN_CSS_REF, function (origin, path1, path2, path3) {
           var filePath = path1 || path2 || path3;
           if (!filePath) {
@@ -131,7 +134,10 @@ var rrwebSnapshot = (function (exports) {
       else if (name === 'srcset') {
           return getAbsoluteSrcsetString(doc, value);
       }
-      else if (name === 'style' && value) {
+      else if (name === 'style' &&
+          value &&
+          value !== null &&
+          value !== 'undefined') {
           return absoluteToStylesheet(value, location.href);
       }
       else {
@@ -175,7 +181,7 @@ var rrwebSnapshot = (function (exports) {
                       return s.href === n.href;
                   });
                   var cssText = getCssRulesString(stylesheet);
-                  if (cssText) {
+                  if (cssText !== null && cssText !== 'underfined' && cssText) {
                       delete attributes_1.rel;
                       delete attributes_1.href;
                       attributes_1._cssText = absoluteToStylesheet(cssText, stylesheet.href);
@@ -187,7 +193,7 @@ var rrwebSnapshot = (function (exports) {
                       n.textContent ||
                       '').trim().length) {
                   var cssText = getCssRulesString(n.sheet);
-                  if (cssText) {
+                  if (cssText !== null && cssText !== 'underfined' && cssText) {
                       attributes_1._cssText = absoluteToStylesheet(cssText, location.href);
                   }
               }
@@ -230,7 +236,10 @@ var rrwebSnapshot = (function (exports) {
               var parentTagName = n.parentNode && n.parentNode.tagName;
               var textContent = n.textContent;
               var isStyle = parentTagName === 'STYLE' ? true : undefined;
-              if (isStyle && textContent) {
+              if (isStyle &&
+                  textContent !== null &&
+                  textContent !== 'underfined' &&
+                  textContent) {
                   textContent = absoluteToStylesheet(textContent, location.href);
               }
               if (parentTagName === 'SCRIPT') {
