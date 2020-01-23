@@ -69,6 +69,9 @@ const URL_IN_CSS_REF = /url\((?:'([^']*)'|"([^"]*)"|([^)]*))\)/gm;
 const RELATIVE_PATH = /^(?!www\.|(?:http|ftp)s?:\/\/|[A-Za-z]:\\|\/\/).*/;
 const DATA_URI = /^(data:)([\w\/\+\-]+);(charset=[\w-]+|base64).*,(.*)/i;
 export function absoluteToStylesheet(cssText: string, href: string): string {
+  if (cssText === null || cssText === 'underfined' || !cssText) {
+    return '';
+  }
   return cssText.replace(URL_IN_CSS_REF, (origin, path1, path2, path3) => {
     const filePath = path1 || path2 || path3;
     if (!filePath) {
