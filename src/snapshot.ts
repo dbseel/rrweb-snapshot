@@ -153,7 +153,12 @@ export function transformAttribute(
     return absoluteToDoc(doc, value);
   } else if (name === 'srcset') {
     return getAbsoluteSrcsetString(doc, value);
-  } else if (name === 'style' && value) {
+  } else if (
+    name === 'style' &&
+    value &&
+    value !== null &&
+    value !== 'undefined'
+  ) {
     return absoluteToStylesheet(value, location.href);
   } else {
     return value;
@@ -202,7 +207,7 @@ function serializeNode(
           return s.href === (n as HTMLLinkElement).href;
         });
         const cssText = getCssRulesString(stylesheet as CSSStyleSheet);
-        if (cssText) {
+        if (cssText !== null && cssText !== 'underfined' && cssText) {
           delete attributes.rel;
           delete attributes.href;
           attributes._cssText = absoluteToStylesheet(
@@ -225,7 +230,7 @@ function serializeNode(
         const cssText = getCssRulesString(
           (n as HTMLStyleElement).sheet as CSSStyleSheet,
         );
-        if (cssText) {
+        if (cssText !== null && cssText !== 'underfined' && cssText) {
           attributes._cssText = absoluteToStylesheet(cssText, location.href);
         }
       }
@@ -276,7 +281,12 @@ function serializeNode(
         n.parentNode && (n.parentNode as HTMLElement).tagName;
       let textContent = (n as Text).textContent;
       const isStyle = parentTagName === 'STYLE' ? true : undefined;
-      if (isStyle && textContent) {
+      if (
+        isStyle &&
+        textContent !== null &&
+        textContent !== 'underfined' &&
+        textContent
+      ) {
         textContent = absoluteToStylesheet(textContent, location.href);
       }
       if (parentTagName === 'SCRIPT') {
