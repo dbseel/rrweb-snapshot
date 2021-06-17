@@ -42,6 +42,8 @@ export declare type commentNode = {
 };
 export declare type serializedNode = (documentNode | documentTypeNode | elementNode | textNode | cdataNode | commentNode) & {
     rootId?: number;
+    isShadowHost?: boolean;
+    isShadow?: boolean;
 };
 export declare type serializedNodeWithId = serializedNode & {
     id: number;
@@ -71,6 +73,7 @@ export declare type MaskInputOptions = Partial<{
     week: boolean;
     textarea: boolean;
     select: boolean;
+    password: boolean;
 }>;
 export declare type SlimDOMOptions = Partial<{
     script: boolean;
@@ -84,3 +87,4 @@ export declare type SlimDOMOptions = Partial<{
     headMetaAuthorship: boolean;
     headMetaVerification: boolean;
 }>;
+export declare type MaskTextFn = (text: string) => string;

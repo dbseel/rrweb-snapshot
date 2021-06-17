@@ -7,10 +7,12 @@ import {
   idNodeMap,
   MaskInputOptions,
   SlimDOMOptions,
+  MaskTextFn,
 } from './types';
+import { isElement, isShadowRoot } from './utils';
 
 let _id = 1;
-const tagNameRegex = RegExp('[^a-z1-6-_]');
+const tagNameRegex = RegExp('[^a-z0-9-_:]');
 
 export const IGNORED_NODE = -2;
 
@@ -108,32 +110,78 @@ export function absoluteToStylesheet(
   );
 }
 
+const SRCSET_NOT_SPACES = /^[^ \t\n\r\u000c]+/; // Don't use \s, to avoid matching non-breaking space
+const SRCSET_COMMAS_OR_SPACES = /^[, \t\n\r\u000c]+/;
 function getAbsoluteSrcsetString(doc: Document, attributeValue: string) {
+  /*
+    run absoluteToDoc over every url in the srcset
+
+    this is adapted from https://github.com/albell/parse-srcset/
+    without the parsing of the descriptors (we return these as-is)
+    parce-srcset is in turn based on
+    https://html.spec.whatwg.org/multipage/embedded-content.html#parse-a-srcset-attribute
+  */
   if (attributeValue.trim() === '') {
     return attributeValue;
   }
 
-  const srcsetValues = attributeValue.split(',');
-  // srcset attributes is defined as such:
-  // srcset = "url size,url1 size1"
-  const resultingSrcsetString = srcsetValues
-    .map((srcItem) => {
-      // removing all but middle spaces
-      const trimmedSrcItem = srcItem.trimLeft().trimRight();
-      const urlAndSize = trimmedSrcItem.split(' ');
-      // this means we have both 0:url and 1:size
-      if (urlAndSize.length === 2) {
-        const absUrl = absoluteToDoc(doc, urlAndSize[0]);
-        return `${absUrl} ${urlAndSize[1]}`;
-      } else if (urlAndSize.length === 1) {
-        const absUrl = absoluteToDoc(doc, urlAndSize[0]);
-        return `${absUrl}`;
-      }
-      return '';
-    })
-    .join(', ');
+  let pos = 0;
 
-  return resultingSrcsetString;
+  function collectCharacters(regEx: RegExp) {
+    var chars,
+      match = regEx.exec(attributeValue.substring(pos));
+    if (match) {
+      chars = match[0];
+      pos += chars.length;
+      return chars;
+    }
+    return '';
+  }
+
+  let output = [];
+  while (true) {
+    collectCharacters(SRCSET_COMMAS_OR_SPACES);
+    if (pos >= attributeValue.length) {
+      break;
+    }
+    // don't split on commas within urls
+    let url = collectCharacters(SRCSET_NOT_SPACES);
+    if (url.slice(-1) === ',') {
+      // aside: according to spec more than one comma at the end is a parse error, but we ignore that
+      url = absoluteToDoc(doc, url.substring(0, url.length - 1));
+      // the trailing comma splits the srcset, so the interpretion is that
+      // another url will follow, and the descriptor is empty
+      output.push(url);
+    } else {
+      let descriptorsStr = '';
+      url = absoluteToDoc(doc, url);
+      let inParens = false;
+      while (true) {
+        let c = attributeValue.charAt(pos);
+        if (c === '') {
+          output.push((url + descriptorsStr).trim());
+          break;
+        } else if (!inParens) {
+          if (c === ',') {
+            pos += 1;
+            output.push((url + descriptorsStr).trim());
+            break; // parse the next url
+          } else if (c === '(') {
+            inParens = true;
+          }
+        } else {
+          // in parenthesis; ignore commas
+          // (parenthesis may be supported by future additions to spec)
+          if (c === ')') {
+            inParens = false;
+          }
+        }
+        descriptorsStr += c;
+        pos += 1;
+      }
+    }
+  }
+  return output.join(', ');
 }
 
 export function absoluteToDoc(doc: Document, attributeValue: string): string {
@@ -158,11 +206,18 @@ function getHref() {
 
 export function transformAttribute(
   doc: Document,
+  tagName: string,
   name: string,
   value: string,
 ): string {
   // relative path in attribute
   if (name === 'src' || ((name === 'href' || name === 'xlink:href') && value)) {
+    return absoluteToDoc(doc, value);
+  } else if (
+    name === 'background' &&
+    value &&
+    (tagName === 'table' || tagName === 'td' || tagName === 'th')
+  ) {
     return absoluteToDoc(doc, value);
   } else if (name === 'srcset' && value) {
     return getAbsoluteSrcsetString(doc, value);
@@ -183,6 +238,7 @@ export function _isBlockedElement(
       return true;
     }
   } else {
+    // tslint:disable-next-line: prefer-for-of
     for (let eIndex = 0; eIndex < element.classList.length; eIndex++) {
       const className = element.classList[eIndex];
       if (blockClass.test(className)) {
@@ -197,6 +253,40 @@ export function _isBlockedElement(
   return false;
 }
 
+export function needMaskingText(
+  node: Node | null,
+  maskTextClass: string | RegExp,
+  maskTextSelector: string | null,
+): boolean {
+  if (!node) {
+    return false;
+  }
+  if (node.nodeType === node.ELEMENT_NODE) {
+    if (typeof maskTextClass === 'string') {
+      if ((node as HTMLElement).classList.contains(maskTextClass)) {
+        return true;
+      }
+    } else {
+      (node as HTMLElement).classList.forEach((className) => {
+        if (maskTextClass.test(className)) {
+          return true;
+        }
+      });
+    }
+    if (maskTextSelector) {
+      if ((node as HTMLElement).matches(maskTextSelector)) {
+        return true;
+      }
+    }
+    return needMaskingText(node.parentNode, maskTextClass, maskTextSelector);
+  }
+  if (node.nodeType === node.TEXT_NODE) {
+    // check parent node since text node do not have class name
+    return needMaskingText(node.parentNode, maskTextClass, maskTextSelector);
+  }
+  return needMaskingText(node.parentNode, maskTextClass, maskTextSelector);
+}
+
 // https://stackoverflow.com/a/36155560
 function onceIframeLoaded(
   iframeEl: HTMLIFrameElement,
@@ -209,7 +299,14 @@ function onceIframeLoaded(
   }
   // document is loading
   let fired = false;
-  if (win.document.readyState !== 'complete') {
+
+  let readyState: DocumentReadyState;
+  try {
+    readyState = win.document.readyState;
+  } catch (error) {
+    return;
+  }
+  if (readyState !== 'complete') {
     const timer = setTimeout(() => {
       if (!fired) {
         listener();
@@ -230,7 +327,9 @@ function onceIframeLoaded(
     iframeEl.src === blankUrl ||
     iframeEl.src === ''
   ) {
-    listener();
+    // iframe was already loaded, make sure we wait to trigger the listener
+    // till _after_ the mutation that found this iframe has had time to process
+    setTimeout(listener, 0);
     return;
   }
   // use default listener
@@ -243,8 +342,11 @@ function serializeNode(
     doc: Document;
     blockClass: string | RegExp;
     blockSelector: string | null;
+    maskTextClass: string | RegExp;
+    maskTextSelector: string | null;
     inlineStylesheet: boolean;
     maskInputOptions: MaskInputOptions;
+    maskTextFn: MaskTextFn | undefined;
     recordCanvas: boolean;
   },
 ): serializedNode | false {
@@ -252,14 +354,17 @@ function serializeNode(
     doc,
     blockClass,
     blockSelector,
+    maskTextClass,
+    maskTextSelector,
     inlineStylesheet,
     maskInputOptions = {},
+    maskTextFn,
     recordCanvas,
   } = options;
   // Only record root id when document object is not the base document
   let rootId: number | undefined;
-  if (((doc as unknown) as INode).__sn) {
-    const docId = ((doc as unknown) as INode).__sn.id;
+  if ((doc as unknown as INode).__sn) {
+    const docId = (doc as unknown as INode).__sn.id;
     rootId = docId === 1 ? undefined : docId;
   }
   switch (n.nodeType) {
@@ -286,7 +391,7 @@ function serializeNode(
       const tagName = getValidTagName(n as HTMLElement);
       let attributes: attributes = {};
       for (const { name, value } of Array.from((n as HTMLElement).attributes)) {
-        attributes[name] = transformAttribute(doc, name, value);
+        attributes[name] = transformAttribute(doc, tagName, name, value);
       }
       // remote css
       if (tagName === 'link' && inlineStylesheet) {
@@ -396,11 +501,22 @@ function serializeNode(
         n.parentNode && (n.parentNode as HTMLElement).tagName;
       let textContent = (n as Text).textContent;
       const isStyle = parentTagName === 'STYLE' ? true : undefined;
+      const isScript = parentTagName === 'SCRIPT' ? true : undefined;
       if (isStyle && textContent) {
         textContent = absoluteToStylesheet(textContent, getHref());
       }
-      if (parentTagName === 'SCRIPT') {
+      if (isScript) {
         textContent = 'SCRIPT_PLACEHOLDER';
+      }
+      if (
+        !isStyle &&
+        !isScript &&
+        needMaskingText(n, maskTextClass, maskTextSelector) &&
+        textContent
+      ) {
+        textContent = maskTextFn
+          ? maskTextFn(textContent)
+          : textContent.replace(/[\S]/g, '*');
       }
       return {
         type: NodeType.Text,
@@ -524,9 +640,12 @@ export function serializeNodeWithId(
     map: idNodeMap;
     blockClass: string | RegExp;
     blockSelector: string | null;
+    maskTextClass: string | RegExp;
+    maskTextSelector: string | null;
     skipChild: boolean;
     inlineStylesheet: boolean;
     maskInputOptions?: MaskInputOptions;
+    maskTextFn: MaskTextFn | undefined;
     slimDOMOptions: SlimDOMOptions;
     recordCanvas?: boolean;
     preserveWhiteSpace?: boolean;
@@ -540,9 +659,12 @@ export function serializeNodeWithId(
     map,
     blockClass,
     blockSelector,
+    maskTextClass,
+    maskTextSelector,
     skipChild = false,
     inlineStylesheet = true,
     maskInputOptions = {},
+    maskTextFn,
     slimDOMOptions,
     recordCanvas = false,
     onSerialize,
@@ -554,8 +676,11 @@ export function serializeNodeWithId(
     doc,
     blockClass,
     blockSelector,
+    maskTextClass,
+    maskTextSelector,
     inlineStylesheet,
     maskInputOptions,
+    maskTextFn,
     recordCanvas,
   });
   if (!_serializedNode) {
@@ -607,26 +732,45 @@ export function serializeNodeWithId(
     ) {
       preserveWhiteSpace = false;
     }
+    const bypassOptions = {
+      doc,
+      map,
+      blockClass,
+      blockSelector,
+      maskTextClass,
+      maskTextSelector,
+      skipChild,
+      inlineStylesheet,
+      maskInputOptions,
+      maskTextFn,
+      slimDOMOptions,
+      recordCanvas,
+      preserveWhiteSpace,
+      onSerialize,
+      onIframeLoad,
+      iframeLoadTimeout,
+    };
     for (const childN of Array.from(n.childNodes)) {
-      const serializedChildNode = serializeNodeWithId(childN, {
-        doc,
-        map,
-        blockClass,
-        blockSelector,
-        skipChild,
-        inlineStylesheet,
-        maskInputOptions,
-        slimDOMOptions,
-        recordCanvas,
-        preserveWhiteSpace,
-        onSerialize,
-        onIframeLoad,
-        iframeLoadTimeout,
-      });
+      const serializedChildNode = serializeNodeWithId(childN, bypassOptions);
       if (serializedChildNode) {
         serializedNode.childNodes.push(serializedChildNode);
       }
     }
+
+    if (isElement(n) && n.shadowRoot) {
+      serializedNode.isShadowHost = true;
+      for (const childN of Array.from(n.shadowRoot.childNodes)) {
+        const serializedChildNode = serializeNodeWithId(childN, bypassOptions);
+        if (serializedChildNode) {
+          serializedChildNode.isShadow = true;
+          serializedNode.childNodes.push(serializedChildNode);
+        }
+      }
+    }
+  }
+
+  if (n.parentNode && isShadowRoot(n.parentNode)) {
+    serializedNode.isShadow = true;
   }
 
   if (
@@ -643,9 +787,12 @@ export function serializeNodeWithId(
             map,
             blockClass,
             blockSelector,
+            maskTextClass,
+            maskTextSelector,
             skipChild: false,
             inlineStylesheet,
             maskInputOptions,
+            maskTextFn,
             slimDOMOptions,
             recordCanvas,
             preserveWhiteSpace,
@@ -670,11 +817,14 @@ function snapshot(
   n: Document,
   options?: {
     blockClass?: string | RegExp;
+    blockSelector?: string | null;
+    maskTextClass?: string | RegExp;
+    maskTextSelector?: string | null;
     inlineStylesheet?: boolean;
     maskAllInputs?: boolean | MaskInputOptions;
+    maskTextFn?: MaskTextFn;
     slimDOM?: boolean | SlimDOMOptions;
     recordCanvas?: boolean;
-    blockSelector?: string | null;
     preserveWhiteSpace?: boolean;
     onSerialize?: (n: INode) => unknown;
     onIframeLoad?: (iframeINode: INode, node: serializedNodeWithId) => unknown;
@@ -683,10 +833,13 @@ function snapshot(
 ): [serializedNodeWithId | null, idNodeMap] {
   const {
     blockClass = 'rr-block',
+    blockSelector = null,
+    maskTextClass = 'rr-mask',
+    maskTextSelector = null,
     inlineStylesheet = true,
     recordCanvas = false,
-    blockSelector = null,
     maskAllInputs = false,
+    maskTextFn,
     slimDOM = false,
     preserveWhiteSpace,
     onSerialize,
@@ -712,9 +865,12 @@ function snapshot(
           week: true,
           textarea: true,
           select: true,
+          password: true,
         }
       : maskAllInputs === false
-      ? {}
+      ? {
+          password: true,
+        }
       : maskAllInputs;
   const slimDOMOptions: SlimDOMOptions =
     slimDOM === true || slimDOM === 'all'
@@ -740,9 +896,12 @@ function snapshot(
       map: idNodeMap,
       blockClass,
       blockSelector,
+      maskTextClass,
+      maskTextSelector,
       skipChild: false,
       inlineStylesheet,
       maskInputOptions,
+      maskTextFn,
       slimDOMOptions,
       recordCanvas,
       preserveWhiteSpace,
