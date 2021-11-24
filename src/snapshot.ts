@@ -8,8 +8,10 @@ import {
   MaskInputOptions,
   SlimDOMOptions,
   MaskTextFn,
+  MaskInputFn,
+  KeepIframeSrcFn,
 } from './types';
-import { isElement, isShadowRoot } from './utils';
+import { isElement, isShadowRoot, maskInputValue } from './utils';
 
 let _id = 1;
 const tagNameRegex = RegExp('[^a-z0-9-_:]');
@@ -67,7 +69,7 @@ function extractOrigin(url: string): string {
   return origin;
 }
 
-const URL_IN_CSS_REF = /url\((?:(')([^']*)'|(")([^"]*)"|([^)]*))\)/gm;
+const URL_IN_CSS_REF = /url\((?:(')([^']*)'|(")(.*?)"|([^)]*))\)/gm;
 const RELATIVE_PATH = /^(?!www\.|(?:http|ftp)s?:\/\/|[A-Za-z]:\\|\/\/|#).*/;
 const DATA_URI = /^(data:)([^,]*),(.*)/i;
 export function absoluteToStylesheet(
@@ -347,7 +349,9 @@ function serializeNode(
     inlineStylesheet: boolean;
     maskInputOptions: MaskInputOptions;
     maskTextFn: MaskTextFn | undefined;
+    maskInputFn: MaskInputFn | undefined;
     recordCanvas: boolean;
+    keepIframeSrcFn: KeepIframeSrcFn;
   },
 ): serializedNode | false {
   const {
@@ -359,7 +363,9 @@ function serializeNode(
     inlineStylesheet,
     maskInputOptions = {},
     maskTextFn,
+    maskInputFn,
     recordCanvas,
+    keepIframeSrcFn,
   } = options;
   // Only record root id when document object is not the base document
   let rootId: number | undefined;
@@ -440,11 +446,13 @@ function serializeNode(
           attributes.type !== 'button' &&
           value
         ) {
-          attributes.value =
-            maskInputOptions[attributes.type as keyof MaskInputOptions] ||
-            maskInputOptions[tagName as keyof MaskInputOptions]
-              ? '*'.repeat(value.length)
-              : value;
+          attributes.value = maskInputValue({
+            type: attributes.type,
+            tagName,
+            value,
+            maskInputOptions,
+            maskInputFn,
+          });
         } else if ((n as HTMLInputElement).checked) {
           attributes.checked = (n as HTMLInputElement).checked;
         }
@@ -464,6 +472,7 @@ function serializeNode(
         attributes.rr_mediaState = (n as HTMLMediaElement).paused
           ? 'paused'
           : 'played';
+        attributes.rr_mediaCurrentTime = (n as HTMLMediaElement).currentTime;
       }
       // scroll
       if ((n as HTMLElement).scrollLeft) {
@@ -482,7 +491,7 @@ function serializeNode(
         };
       }
       // iframe
-      if (tagName === 'iframe') {
+      if (tagName === 'iframe' && !keepIframeSrcFn(attributes.src as string)) {
         delete attributes.src;
       }
       return {
@@ -559,10 +568,17 @@ function slimDOMExcluded(
   } else if (sn.type === NodeType.Element) {
     if (
       slimDOMOptions.script &&
+      // script tag
       (sn.tagName === 'script' ||
+        // preload link
         (sn.tagName === 'link' &&
           sn.attributes.rel === 'preload' &&
-          sn.attributes.as === 'script'))
+          sn.attributes.as === 'script') ||
+        // prefetch link
+        (sn.tagName === 'link' &&
+          sn.attributes.rel === 'prefetch' &&
+          typeof sn.attributes.href === 'string' &&
+          sn.attributes.href.endsWith('.js')))
     ) {
       return true;
     } else if (
@@ -646,7 +662,9 @@ export function serializeNodeWithId(
     inlineStylesheet: boolean;
     maskInputOptions?: MaskInputOptions;
     maskTextFn: MaskTextFn | undefined;
+    maskInputFn: MaskInputFn | undefined;
     slimDOMOptions: SlimDOMOptions;
+    keepIframeSrcFn?: KeepIframeSrcFn;
     recordCanvas?: boolean;
     preserveWhiteSpace?: boolean;
     onSerialize?: (n: INode) => unknown;
@@ -665,11 +683,13 @@ export function serializeNodeWithId(
     inlineStylesheet = true,
     maskInputOptions = {},
     maskTextFn,
+    maskInputFn,
     slimDOMOptions,
     recordCanvas = false,
     onSerialize,
     onIframeLoad,
     iframeLoadTimeout = 5000,
+    keepIframeSrcFn = () => false,
   } = options;
   let { preserveWhiteSpace = true } = options;
   const _serializedNode = serializeNode(n, {
@@ -681,7 +701,9 @@ export function serializeNodeWithId(
     inlineStylesheet,
     maskInputOptions,
     maskTextFn,
+    maskInputFn,
     recordCanvas,
+    keepIframeSrcFn,
   });
   if (!_serializedNode) {
     // TODO: dev only
@@ -743,12 +765,14 @@ export function serializeNodeWithId(
       inlineStylesheet,
       maskInputOptions,
       maskTextFn,
+      maskInputFn,
       slimDOMOptions,
       recordCanvas,
       preserveWhiteSpace,
       onSerialize,
       onIframeLoad,
       iframeLoadTimeout,
+      keepIframeSrcFn,
     };
     for (const childN of Array.from(n.childNodes)) {
       const serializedChildNode = serializeNodeWithId(childN, bypassOptions);
@@ -793,12 +817,14 @@ export function serializeNodeWithId(
             inlineStylesheet,
             maskInputOptions,
             maskTextFn,
+            maskInputFn,
             slimDOMOptions,
             recordCanvas,
             preserveWhiteSpace,
             onSerialize,
             onIframeLoad,
             iframeLoadTimeout,
+            keepIframeSrcFn,
           });
 
           if (serializedIframeNode) {
@@ -823,12 +849,14 @@ function snapshot(
     inlineStylesheet?: boolean;
     maskAllInputs?: boolean | MaskInputOptions;
     maskTextFn?: MaskTextFn;
+    maskInputFn?: MaskTextFn;
     slimDOM?: boolean | SlimDOMOptions;
     recordCanvas?: boolean;
     preserveWhiteSpace?: boolean;
     onSerialize?: (n: INode) => unknown;
     onIframeLoad?: (iframeINode: INode, node: serializedNodeWithId) => unknown;
     iframeLoadTimeout?: number;
+    keepIframeSrcFn?: KeepIframeSrcFn;
   },
 ): [serializedNodeWithId | null, idNodeMap] {
   const {
@@ -840,11 +868,13 @@ function snapshot(
     recordCanvas = false,
     maskAllInputs = false,
     maskTextFn,
+    maskInputFn,
     slimDOM = false,
     preserveWhiteSpace,
     onSerialize,
     onIframeLoad,
     iframeLoadTimeout,
+    keepIframeSrcFn = () => false,
   } = options || {};
   const idNodeMap: idNodeMap = {};
   const maskInputOptions: MaskInputOptions =
@@ -902,12 +932,14 @@ function snapshot(
       inlineStylesheet,
       maskInputOptions,
       maskTextFn,
+      maskInputFn,
       slimDOMOptions,
       recordCanvas,
       preserveWhiteSpace,
       onSerialize,
       onIframeLoad,
       iframeLoadTimeout,
+      keepIframeSrcFn,
     }),
     idNodeMap,
   ];

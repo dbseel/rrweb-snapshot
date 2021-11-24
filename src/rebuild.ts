@@ -58,8 +58,8 @@ function getTagName(n: elementNode): string {
 }
 
 // based on https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions#escaping
-function escapeRegExp(string: string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+function escapeRegExp(str: string) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
 }
 
 const HOVER_SELECTOR = /([^\\]):hover/;
@@ -84,7 +84,9 @@ export function addHoverClass(cssText: string): string {
     }
   });
 
-  if (selectors.length === 0) return cssText;
+  if (selectors.length === 0) {
+    return cssText;
+  }
 
   const selectorMatcher = new RegExp(
     selectors
@@ -154,9 +156,7 @@ function buildNode(
             node.appendChild(child);
             continue;
           }
-          if (tagName === 'iframe' && name === 'src') {
-            continue;
-          }
+
           try {
             if (n.isSVG && name === 'xlink:href') {
               node.setAttributeNS('http://www.w3.org/1999/xlink', name, value);
@@ -172,12 +172,25 @@ function buildNode(
             } else if (
               tagName === 'meta' &&
               n.attributes['http-equiv'] === 'Content-Security-Policy' &&
-              name == 'content'
+              name === 'content'
             ) {
               // If CSP contains style-src and inline-style is disabled, there will be an error "Refused to apply inline style because it violates the following Content Security Policy directive: style-src '*'".
               // And the function insertStyleRules in rrweb replayer will throw an error "Uncaught TypeError: Cannot read property 'insertRule' of null".
               node.setAttribute('csp-content', value);
               continue;
+            } else if (
+              tagName === 'link' &&
+              n.attributes.rel === 'preload' &&
+              n.attributes.as === 'script'
+            ) {
+              // ignore
+            } else if (
+              tagName === 'link' &&
+              n.attributes.rel === 'prefetch' &&
+              typeof n.attributes.href === 'string' &&
+              n.attributes.href.endsWith('.js')
+            ) {
+              // ignore
             } else {
               node.setAttribute(name, value);
             }
@@ -202,10 +215,17 @@ function buildNode(
           if (name === 'rr_height') {
             (node as HTMLElement).style.height = value;
           }
+          if (name === 'rr_mediaCurrentTime') {
+            (node as HTMLMediaElement).currentTime = n.attributes
+              .rr_mediaCurrentTime as number;
+          }
           if (name === 'rr_mediaState') {
             switch (value) {
               case 'played':
-                (node as HTMLMediaElement).play();
+                (node as HTMLMediaElement)
+                  .play()
+                  .catch((e) => console.warn('media playback error', e));
+                break;
               case 'paused':
                 (node as HTMLMediaElement).pause();
                 break;
@@ -264,7 +284,7 @@ export function buildNodeWithSN(
   }
   if (n.rootId) {
     console.assert(
-      (map[n.rootId] as unknown as Document) === doc,
+      ((map[n.rootId] as unknown) as Document) === doc,
       'Target document should has the same root id.',
     );
   }
@@ -327,7 +347,7 @@ function handleScroll(node: INode) {
   if (n.type !== NodeType.Element) {
     return;
   }
-  const el = node as Node as HTMLElement;
+  const el = (node as Node) as HTMLElement;
   for (const name in n.attributes) {
     if (!(n.attributes.hasOwnProperty(name) && name.startsWith('rr_'))) {
       continue;
