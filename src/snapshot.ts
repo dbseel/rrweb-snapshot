@@ -727,7 +727,14 @@ export function serializeNodeWithId(
     id = genId();
   }
   const serializedNode = Object.assign(_serializedNode, { id });
-  (n as INode).__sn = serializedNode;
+  // if the object is not extensible, an exception will be thrown
+  // when attempting to add the __sn property
+  if (Object.isExtensible(n)) {
+    (n as INode).__sn = serializedNode;
+  } else {
+    // ignore this node
+    return null;
+  }
   if (id === IGNORED_NODE) {
     return null; // slimDOM
   }
